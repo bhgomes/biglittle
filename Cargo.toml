@@ -1,0 +1,34 @@
+[package]
+name = "biglittle"
+edition = "2021"
+version = "0.1.0"
+authors = ["Brandon H. Gomes <bhgomes@pm.me>"]
+readme = "README.md"
+license-file = "LICENSE"
+repository = "https://github.com/bhgomes/biglittle"
+homepage = "https://github.com/bhgomes/biglittle"
+documentation = "https://github.com/bhgomes/biglittle"
+categories = [""]
+keywords = ["stable matching problem"]
+description = "Stable matching for Bigs and Littles"
+publish = false
+
+[package.metadata.docs.rs]
+# To build locally:
+# RUSTDOCFLAGS="--cfg doc_cfg" cargo +nightly doc --all-features --open
+all-features = true
+rustdoc-args = ["--cfg", "doc_cfg"]
+
+[[bin]]
+name = "biglittle"
+path = "src/main.rs"
+required-features = ["anyhow", "clap", "csv", "serde"]
+
+[dependencies]
+anyhow = { version = "1.0.53", optional = true, default-features = false }
+clap = { version = "3.0.14", optional = true, default-features = false, features = ["derive", "std"] }
+csv = { version = "1.1.6", optional = true, default-features = false }
+derivative = { version = "2.2.0", default-features = false, features = ["use_core"] }
+indexmap = { version = "1.8.0", default-features = false }
+serde = { version = "1.0.136", optional = true, default-features = false, features = ["derive"] }
+
