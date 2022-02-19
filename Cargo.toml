@@ -22,13 +22,13 @@ rustdoc-args = ["--cfg", "doc_cfg"]
 [[bin]]
 name = "biglittle"
 path = "src/main.rs"
-required-features = ["anyhow", "clap", "csv", "serde"]
+required-features = ["anyhow", "clap", "csv"]
 
 [dependencies]
-anyhow = { version = "1.0.53", optional = true, default-features = false }
+anyhow = { version = "1.0.53", optional = true }
 clap = { version = "3.0.14", optional = true, default-features = false, features = ["derive", "std"] }
 csv = { version = "1.1.6", optional = true, default-features = false }
 derivative = { version = "2.2.0", default-features = false, features = ["use_core"] }
 indexmap = { version = "1.8.0", default-features = false }
-serde = { version = "1.0.136", optional = true, default-features = false, features = ["derive"] }
+serde = { version = "1.0.136", default-features = false, features = ["derive"] }
 
