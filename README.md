@@ -1,6 +1,6 @@
 # Big-Little Matching
 
-This Rust crate implements a matching algorithm for a two-colored ranking graph. This crate also comes with an executable which can read it's input from CSV files.
+This Rust crate implements a matching algorithm for a two-party ranking system. This crate also comes with an executable which can read it's input from CSV files.
 
 ## How to Use
 
