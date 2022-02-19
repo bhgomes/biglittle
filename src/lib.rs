@@ -8,9 +8,8 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
-use core::{fmt, marker::PhantomData, num::NonZeroU32};
-use indexmap::IndexSet;
-use serde::{Deserialize, Serialize};
+use core::{cmp::Ordering, fmt, marker::PhantomData, num::NonZeroU32};
+use indexmap::{map::Entry, IndexMap, IndexSet};
 
 /// Sealed Module
 mod sealed {
@@ -19,7 +18,7 @@ mod sealed {
 }
 
 /// Dynamic Kind
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DynamicKind {
     /// Big Kind
     Big,
@@ -32,6 +31,15 @@ pub enum DynamicKind {
 pub trait Kind: sealed::Sealed + Sized {
     /// Opposite Kind
     type Opposite: Kind;
+
+    /// Returns the [`DynamicKind`] that matches `Self`.
+    fn dynamic() -> DynamicKind;
+
+    ///
+    fn names(names: &Names) -> NamesSubset<Self>;
+
+    ///
+    fn names_mut(names: &mut Names) -> NamesSubsetMut<Self>;
 
     /// Returns a shared references to the subset of the preference `table` which corresponds to
     /// `Self` preferences.
@@ -92,6 +100,7 @@ where
     where
         I: IntoIterator<Item = Index<K::Opposite>>,
     {
+        // TODO: Use `Iterator::reduce` to simplify this.
         let mut maximum = None;
         for index in others {
             if let Some(preference) = self.preference(index, table) {
@@ -192,6 +201,21 @@ macro_rules! impl_kind {
             type Opposite = $opposite;
 
             #[inline]
+            fn dynamic() -> DynamicKind {
+                DynamicKind::$type
+            }
+
+            #[inline]
+            fn names(names: &Names) -> NamesSubset<Self> {
+                NamesSubset::<Self>::new(names)
+            }
+
+            #[inline]
+            fn names_mut(names: &mut Names) -> NamesSubsetMut<Self> {
+                NamesSubsetMut::<Self>::new(names)
+            }
+
+            #[inline]
             fn preferences(table: &PreferenceTable) -> PreferenceSubset<Self> {
                 PreferenceSubset::<Self>::new(table)
             }
@@ -214,6 +238,95 @@ macro_rules! impl_kind {
 
 impl_kind!("Big", Big, Little, BigIndex, BigPreference);
 impl_kind!("Little", Little, Big, LittleIndex, LittlePreference);
+
+///
+type NamesSubsetType = IndexSet<String>;
+
+///
+pub struct NamesSubset<'k, K>(&'k NamesSubsetType, PhantomData<K>)
+where
+    K: Kind;
+
+impl<'k> NamesSubset<'k, Big> {
+    ///
+    #[inline]
+    fn new(names: &'k Names) -> Self {
+        Self(&names.bigs, PhantomData)
+    }
+}
+
+impl<'k> NamesSubset<'k, Little> {
+    ///
+    #[inline]
+    fn new(names: &'k Names) -> Self {
+        Self(&names.littles, PhantomData)
+    }
+}
+
+///
+pub struct NamesSubsetMut<'k, K>(&'k mut NamesSubsetType, PhantomData<K>)
+where
+    K: Kind;
+
+impl<'k> NamesSubsetMut<'k, Big> {
+    ///
+    #[inline]
+    fn new(names: &'k mut Names) -> Self {
+        Self(&mut names.bigs, PhantomData)
+    }
+}
+
+impl<'k> NamesSubsetMut<'k, Little> {
+    ///
+    #[inline]
+    fn new(names: &'k mut Names) -> Self {
+        Self(&mut names.littles, PhantomData)
+    }
+}
+
+/// Names
+#[derive(Debug, Default)]
+pub struct Names {
+    /// Big Names
+    bigs: IndexSet<String>,
+
+    /// Little Names
+    littles: IndexSet<String>,
+}
+
+impl Names {
+    ///
+    #[inline]
+    pub fn insert<K>(&mut self, name: String) -> Option<Index<K>>
+    where
+        K: Kind,
+    {
+        if K::Opposite::names(self).0.contains(&name) {
+            return None;
+        }
+        let names = K::names_mut(self).0;
+        names.insert(name.clone());
+        self.index(&name)
+    }
+
+    ///
+    #[inline]
+    pub fn get<K>(&self, index: Index<K>) -> Option<&String>
+    where
+        K: Kind,
+    {
+        K::names(self).0.get_index(index.index as usize)
+    }
+
+    ///
+    #[inline]
+    pub fn index<K>(&self, name: &str) -> Option<Index<K>>
+    where
+        K: Kind,
+    {
+        K::names(self).0.get_index_of(name).map(Into::into)
+    }
+}
 
 /// Preference Table Subset Type
 type PreferenceSubsetType<K> = IndexSet<Vec<Index<<K as Kind>::Opposite>>>;
@@ -285,21 +398,85 @@ impl PreferenceTable {
 
     ///
     #[inline]
-    pub fn find_primitive_matching(&self) -> MatchingSet {
-        // FIXME: add unmatched indices
-        let mut matching_set = MatchingSet::default();
-        for (i, preferences) in self.little_preferences.iter().enumerate() {
-            for big in preferences {
-                matching_set.insert_match(*big, Index::new(i as u32));
+    fn update_matching<'i, I>(&self, matching_set: &mut MatchingSet, little: LittleIndex, bigs: I)
+    where
+        I: IntoIterator<Item = &'i BigIndex>,
+    {
+        let mut bigs = bigs.into_iter();
+        loop {
+            if let Some(big) = bigs.next() {
+                if big.preference(little, self).is_some() {
+                    matching_set.insert_match(self, *big, little);
+                    break;
+                }
+            } else {
+                matching_set.unmatched_littles.insert(little);
+                break;
             }
+        }
+    }
+
+    ///
+    #[inline]
+    fn collect_unmatched_bigs(&self, matching_set: &mut MatchingSet) {
+        for big in 0..self.big_preferences.len() {
+            let big = Index::from(big);
+            if !matching_set.matches.iter().any(|m| m.big == big) {
+                matching_set.unmatched_bigs.insert(big);
+            }
+        }
+    }
+
+    ///
+    #[inline]
+    fn primitive_matching(&self) -> MatchingSet {
+        let mut matching_set = MatchingSet::default();
+        for (i, bigs) in self.little_preferences.iter().enumerate() {
+            self.update_matching(&mut matching_set, Index::from(i), bigs.iter());
         }
         matching_set
     }
 
     ///
     #[inline]
-    pub fn find_even_matching(&self) -> MatchingSet {
-        todo!()
+    pub fn find_primitive_matching(&self) -> MatchingSet {
+        let mut matching_set = self.primitive_matching();
+        self.collect_unmatched_bigs(&mut matching_set);
+        matching_set
+    }
+
+    ///
+    #[inline]
+    pub fn find_even_matching(&self) -> Option<MatchingSet> {
+        let mut matching_set = self.primitive_matching();
+        let mut preference_index = IndexMap::<LittleIndex, usize>::new();
+        while let Some(matching) = matching_set.largest_match(self.big_preferences.len()) {
+            if let Some(little) = matching.littles.pop() {
+                let preference_index = match preference_index.entry(little) {
+                    Entry::Occupied(mut entry) => {
+                        let index = *entry.get();
+                        entry.insert(index + 1);
+                        index
+                    }
+                    Entry::Vacant(entry) => {
+                        let index = 1;
+                        entry.insert(index);
+                        index
+                    }
+                };
+                self.update_matching(
+                    &mut matching_set,
+                    little,
+                    self.little_preferences[little.index as usize]
+                        .iter()
+                        .skip(preference_index),
+                );
+            } else {
+                return None;
+            }
+        }
+        self.collect_unmatched_bigs(&mut matching_set);
+        Some(matching_set)
     }
 }
 
@@ -339,10 +516,21 @@ pub struct MatchingSet {
 impl MatchingSet {
     ///
     #[inline]
-    fn insert_match(&mut self, big: BigIndex, little: LittleIndex) {
+    fn insert_match(&mut self, table: &PreferenceTable, big: BigIndex, little: LittleIndex) {
         match self.matches.binary_search_by_key(&big, |m| m.big) {
             Ok(index) => {
-                self.matches[index].littles.insert(little);
+                let littles = &mut self.matches[index].littles;
+                littles.insert(little);
+                littles.sort_by(|lhs, rhs| {
+                    match (big.preference(*lhs, table), big.preference(*rhs, table)) {
+                        (Some(lhs_preference), Some(rhs_preference)) => {
+                            lhs_preference.cmp(&rhs_preference)
+                        }
+                        (None, Some(_)) => Ordering::Greater,
+                        (Some(_), None) => Ordering::Less,
+                        _ => Ordering::Equal,
+                    }
+                });
             }
             Err(index) => {
                 self.matches.insert(index, Matching::from_pair(big, little));
@@ -352,40 +540,76 @@ impl MatchingSet {
 
     ///
     #[inline]
-    pub fn is_stable(&self, preferences: &PreferenceTable) -> bool {
-        self.deviation_from_stability(preferences) == 0
+    fn largest_match(&mut self, big_count: usize) -> Option<&mut Matching> {
+        if self.matches.len() == big_count {
+            return None;
+        }
+        if self.matches.len() == 1 {
+            return self.matches.get_mut(0);
+        }
+        let first = self.matches.first()?.littles.len();
+        if self
+            .matches
+            .iter()
+            .skip(1)
+            .all(|m| first == m.littles.len())
+        {
+            return None;
+        }
+        self.matches.iter_mut().reduce(|lhs, rhs| {
+            if lhs.littles.len() < rhs.littles.len() {
+                rhs
+            } else {
+                lhs
+            }
+        })
     }
 
     ///
     #[inline]
-    pub fn deviation_from_stability(&self, preferences: &PreferenceTable) -> u32 {
-        todo!()
+    pub fn display<'s>(&'s self, names: &'s Names) -> MatchingSetDisplay<'s> {
+        MatchingSetDisplay {
+            matching_set: self,
+            names,
+        }
     }
 }
 
 ///
-#[derive(Debug, Default)]
-pub struct Names {
-    /// Name Set
-    names: IndexSet<String>,
+pub struct MatchingSetDisplay<'s> {
+    ///
+    matching_set: &'s MatchingSet,
+
+    ///
+    names: &'s Names,
 }
 
-impl Names {
-    ///
+impl<'s> fmt::Display for MatchingSetDisplay<'s> {
     #[inline]
-    pub fn insert(&mut self, name: String) -> u32 {
-        self.names.insert_full(name).0 as u32
-    }
-
-    ///
-    #[inline]
-    pub fn name(&self, index: u32) -> Option<&String> {
-        self.names.get_index(index as usize)
-    }
-
-    ///
-    #[inline]
-    pub fn index(&self, name: &str) -> Option<u32> {
-        self.names.get_index_of(name).map(|i| i as u32)
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "MatchingSet {{\n    matches: [")?;
+        for matching in &self.matching_set.matches {
+            write!(
+                f,
+                "\n        {{ big: {:?}, littles: [",
+                self.names.get(matching.big).unwrap(),
+            )?;
+            for little in &matching.littles {
+                write!(f, "{:?}, ", self.names.get(*little).unwrap())?;
+            }
+            write!(f, "] }}")?;
+        }
+        writeln!(f, "\n    ],")?;
+        write!(f, "    unmatched_bigs: [")?;
+        for big in &self.matching_set.unmatched_bigs {
+            write!(f, "{:?}, ", self.names.get(*big).unwrap())?;
+        }
+        writeln!(f, "]")?;
+        write!(f, "    unmatched_littles: [")?;
+        for little in &self.matching_set.unmatched_littles {
+            write!(f, "{:?}, ", self.names.get(*little).unwrap())?;
+        }
+        writeln!(f, "],")?;
+        write!(f, "}}")
     }
 }
