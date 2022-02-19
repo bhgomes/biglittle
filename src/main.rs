@@ -20,13 +20,30 @@ pub struct Args {
 #[derive(Debug, Deserialize)]
 pub struct Record {
     /// Name
+    #[serde(rename = "Name")]
     pub name: String,
 
     /// Matching Kind
+    #[serde(rename = "Kind")]
     pub kind: DynamicKind,
 
     /// Preferences
-    pub preferences: Vec<String>,
+    #[serde(rename = "Preferences")]
+    pub preferences: PreferenceString,
+}
+
+///
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "String")]
+pub struct PreferenceString(Vec<String>);
+
+impl TryFrom<String> for PreferenceString {
+    type Error = usize;
+
+    #[inline]
+    fn try_from(string: String) -> Result<Self, Self::Error> {
+        todo!()
+    }
 }
 
 /// Runs the Big-Little Matching CLI.
@@ -49,6 +66,7 @@ pub fn main() -> anyhow::Result<()> {
                         preferences.insert::<Big, _>(
                             record
                                 .preferences
+                                .0
                                 .into_iter()
                                 .map(|name| names.insert(name).into()),
                         );
@@ -57,15 +75,16 @@ pub fn main() -> anyhow::Result<()> {
                         preferences.insert::<Little, _>(
                             record
                                 .preferences
+                                .0
                                 .into_iter()
                                 .map(|name| names.insert(name).into()),
                         );
                     }
                 }
             }
-            println!("Names: {:?}", names);
-            println!("Preferences {:?}", preferences);
-            println!("Matching: {:?}", preferences.find_matching());
+            println!("Names: {:#?}", names);
+            println!("Preferences {:#?}", preferences);
+            println!("Matching: {:#?}", preferences.find_primitive_matching());
             Ok(())
         }
         Some(ext) => bail!("Unrecognized input file format: {ext}."),

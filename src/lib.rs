@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
-use core::{marker::PhantomData, num::NonZeroU32};
+use core::{fmt, marker::PhantomData, num::NonZeroU32};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +44,7 @@ pub trait Kind: sealed::Sealed + Sized {
 
 /// Matching Index
 #[derive(derivative::Derivative)]
-#[derivative(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derivative(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Index<K>
 where
     K: Kind,
@@ -110,6 +110,16 @@ where
     }
 }
 
+impl<K> fmt::Debug for Index<K>
+where
+    K: Kind,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.index.fmt(f)
+    }
+}
+
 impl<K> From<u32> for Index<K>
 where
     K: Kind,
@@ -132,7 +142,7 @@ where
 
 /// Matching Preference
 #[derive(derivative::Derivative)]
-#[derivative(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derivative(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Preference<K>
 where
     K: Kind,
@@ -155,6 +165,16 @@ where
             preference,
             __: PhantomData,
         }
+    }
+}
+
+impl<K> fmt::Debug for Preference<K>
+where
+    K: Kind,
+{
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.preference.fmt(f)
     }
 }
 
@@ -265,16 +285,21 @@ impl PreferenceTable {
 
     ///
     #[inline]
-    pub fn find_matching(&self) -> Option<MatchingSet> {
-        // TODO: This does not take into account spreading the distribution.
-
+    pub fn find_primitive_matching(&self) -> MatchingSet {
+        // FIXME: add unmatched indices
         let mut matching_set = MatchingSet::default();
         for (i, preferences) in self.little_preferences.iter().enumerate() {
             for big in preferences {
                 matching_set.insert_match(*big, Index::new(i as u32));
             }
         }
-        Some(matching_set)
+        matching_set
+    }
+
+    ///
+    #[inline]
+    pub fn find_even_matching(&self) -> MatchingSet {
+        todo!()
     }
 }
 
