@@ -27,28 +27,110 @@ pub enum DynamicKind {
     Little,
 }
 
-/// Matching Kind
+/// Select Base
+pub trait SelectBase<K>
+where
+    K: Kind,
+{
+    /// Select Type
+    type Type;
+}
+
+/// Select Type Alias
+pub type SelectType<K, S> = <S as SelectBase<K>>::Type;
+
+/// Select
+pub trait Select<K>: SelectBase<K> + SelectBase<Big> + SelectBase<Little>
+where
+    K: Kind,
+{
+    /// Returns a shared reference to the big variant of the [`SelectBase`] data structure.
+    fn big(&self) -> &SelectType<Big, Self>;
+
+    /// Returns a shared reference to the little variant of the [`SelectBase`] data structure.
+    fn little(&self) -> &SelectType<Little, Self>;
+}
+
+/// Select Mutable
+pub trait SelectMut<K>: Select<K>
+where
+    K: Kind,
+{
+    /// Returns a mutable reference to the big variant of the [`SelectBase`] data structure.
+    fn big(&mut self) -> &mut SelectType<Big, Self>;
+
+    /// Returns a mutable reference to the little variant of the [`SelectBase`] data structure.
+    fn little(&mut self) -> &mut SelectType<Little, Self>;
+}
+
+/// Selection Kind
 pub trait Kind: sealed::Sealed + Sized {
     /// Opposite Kind
+    ///
+    /// For bigs the opposite kind are littles, and for littles the opposite kind are bigs.
     type Opposite: Kind;
 
     /// Returns the [`DynamicKind`] that matches `Self`.
     fn dynamic() -> DynamicKind;
 
-    ///
-    fn names(names: &Names) -> NamesSubset<Self>;
+    /// Returns a shared reference to the `Self`-variant of `select`.
+    fn select<S>(select: &S) -> &SelectType<Self, S>
+    where
+        S: Select<Self>;
 
-    ///
-    fn names_mut(names: &mut Names) -> NamesSubsetMut<Self>;
-
-    /// Returns a shared references to the subset of the preference `table` which corresponds to
-    /// `Self` preferences.
-    fn preferences(table: &PreferenceTable) -> PreferenceSubset<Self>;
-
-    /// Returns a mutable references to the subset of the preference `table` which corresponds to
-    /// `Self` preferences.
-    fn preferences_mut(table: &mut PreferenceTable) -> PreferenceSubsetMut<Self>;
+    /// Returns a mutable reference to the `Self`-variant of `select`.
+    fn select_mut<S>(select: &mut S) -> &mut SelectType<Self, S>
+    where
+        S: SelectMut<Self>;
 }
+
+/// Builds the implementation of a [`Kind`] marker.
+macro_rules! impl_kind {
+    ($doc:expr, $type:ident, $opposite:ident, $method:ident, $index:ident, $preference:ident) => {
+        #[doc = $doc]
+        #[doc = "Matching Kind Marker"]
+        #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+        pub struct $type;
+
+        impl sealed::Sealed for $type {}
+
+        impl Kind for $type {
+            type Opposite = $opposite;
+
+            #[inline]
+            fn dynamic() -> DynamicKind {
+                DynamicKind::$type
+            }
+
+            #[inline]
+            fn select<S>(select: &S) -> &SelectType<Self, S>
+            where
+                S: Select<Self>,
+            {
+                select.$method()
+            }
+
+            #[inline]
+            fn select_mut<S>(select: &mut S) -> &mut SelectType<Self, S>
+            where
+                S: SelectMut<Self>,
+            {
+                select.$method()
+            }
+        }
+
+        #[doc = $doc]
+        #[doc = "Matching Index Type"]
+        pub type $index = Index<$type>;
+
+        #[doc = $doc]
+        #[doc = "Matching Preference Type"]
+        pub type $preference = Preference<$type>;
+    };
+}
+
+impl_kind!("Big", Big, Little, big, BigIndex, BigPreference);
+impl_kind!("Little", Little, Big, little, LittleIndex, LittlePreference);
 
 /// Matching Index
 #[derive(derivative::Derivative)]
@@ -84,38 +166,10 @@ where
         other: Index<K::Opposite>,
         table: &PreferenceTable,
     ) -> Option<Preference<K>> {
-        K::preferences(table).0[self.index as usize]
+        K::select(table)[self.index as usize]
             .iter()
             .position(|i| *i == other)
             .and_then(|i| NonZeroU32::new((i + 1) as u32).map(Preference::new))
-    }
-
-    /// Finds the maximum prefered index among `others` according to `self` using `table`.
-    #[inline]
-    pub fn max_preference<I>(
-        self,
-        others: I,
-        table: &PreferenceTable,
-    ) -> Option<(Index<K::Opposite>, Preference<K>)>
-    where
-        I: IntoIterator<Item = Index<K::Opposite>>,
-    {
-        // TODO: Use `Iterator::reduce` to simplify this.
-        let mut maximum = None;
-        for index in others {
-            if let Some(preference) = self.preference(index, table) {
-                match maximum.as_mut() {
-                    Some((max_index, max_preference)) => {
-                        if preference > *max_preference {
-                            *max_index = index;
-                            *max_preference = preference;
-                        }
-                    }
-                    _ => maximum = Some((index, preference)),
-                }
-            }
-        }
-        maximum
     }
 }
 
@@ -187,135 +241,37 @@ where
     }
 }
 
-/// Builds an implementation of [`Kind`] markers.
-macro_rules! impl_kind {
-    ($doc:expr, $type:ident, $opposite:ident, $index:ident, $preference:ident) => {
-        #[doc = $doc]
-        #[doc = "Matching Kind Marker"]
-        #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-        pub struct $type;
-
-        impl sealed::Sealed for $type {}
-
-        impl Kind for $type {
-            type Opposite = $opposite;
-
-            #[inline]
-            fn dynamic() -> DynamicKind {
-                DynamicKind::$type
-            }
-
-            #[inline]
-            fn names(names: &Names) -> NamesSubset<Self> {
-                NamesSubset::<Self>::new(names)
-            }
-
-            #[inline]
-            fn names_mut(names: &mut Names) -> NamesSubsetMut<Self> {
-                NamesSubsetMut::<Self>::new(names)
-            }
-
-            #[inline]
-            fn preferences(table: &PreferenceTable) -> PreferenceSubset<Self> {
-                PreferenceSubset::<Self>::new(table)
-            }
-
-            #[inline]
-            fn preferences_mut(table: &mut PreferenceTable) -> PreferenceSubsetMut<Self> {
-                PreferenceSubsetMut::<Self>::new(table)
-            }
-        }
-
-        #[doc = $doc]
-        #[doc = "Matching Index Type"]
-        pub type $index = Index<$type>;
-
-        #[doc = $doc]
-        #[doc = "Matching Preference Type"]
-        pub type $preference = Preference<$type>;
-    };
-}
-
-impl_kind!("Big", Big, Little, BigIndex, BigPreference);
-impl_kind!("Little", Little, Big, LittleIndex, LittlePreference);
-
-///
-type NamesSubsetType = IndexSet<String>;
-
-///
-pub struct NamesSubset<'k, K>(&'k NamesSubsetType, PhantomData<K>)
-where
-    K: Kind;
-
-impl<'k> NamesSubset<'k, Big> {
-    ///
-    #[inline]
-    fn new(names: &'k Names) -> Self {
-        Self(&names.bigs, PhantomData)
-    }
-}
-
-impl<'k> NamesSubset<'k, Little> {
-    ///
-    #[inline]
-    fn new(names: &'k Names) -> Self {
-        Self(&names.littles, PhantomData)
-    }
-}
-
-///
-pub struct NamesSubsetMut<'k, K>(&'k mut NamesSubsetType, PhantomData<K>)
-where
-    K: Kind;
-
-impl<'k> NamesSubsetMut<'k, Big> {
-    ///
-    #[inline]
-    fn new(names: &'k mut Names) -> Self {
-        Self(&mut names.bigs, PhantomData)
-    }
-}
-
-impl<'k> NamesSubsetMut<'k, Little> {
-    ///
-    #[inline]
-    fn new(names: &'k mut Names) -> Self {
-        Self(&mut names.littles, PhantomData)
-    }
-}
-
 /// Names
 #[derive(Debug, Default)]
-pub struct Names {
+pub struct Names<T = String> {
     /// Big Names
-    bigs: IndexSet<String>,
+    bigs: IndexSet<T>,
 
     /// Little Names
-    littles: IndexSet<String>,
+    littles: IndexSet<T>,
 }
 
 impl Names {
-    ///
+    /// Insert a new `name` with the given kind `K`. This method returns `None` if `name` is
+    /// contained in the opposite variant.
     #[inline]
     pub fn insert<K>(&mut self, name: String) -> Option<Index<K>>
     where
         K: Kind,
     {
-        if K::Opposite::names(self).0.contains(&name) {
+        if K::Opposite::select(self).contains(&name) {
             return None;
         }
-        let names = K::names_mut(self).0;
-        names.insert(name.clone());
-        self.index(&name)
+        Some(K::select_mut(self).insert_full(name).0.into())
     }
 
-    ///
+    /// Returns the name associated to `index` if it is contained in the set.
     #[inline]
     pub fn get<K>(&self, index: Index<K>) -> Option<&String>
     where
         K: Kind,
     {
-        K::names(self).0.get_index(index.index as usize)
+        K::select(self).get_index(index.index as usize)
     }
 
     ///
@@ -324,52 +280,44 @@ impl Names {
     where
         K: Kind,
     {
-        K::names(self).0.get_index_of(name).map(Into::into)
+        K::select(self).get_index_of(name).map(Into::into)
     }
 }
 
-/// Preference Table Subset Type
-type PreferenceSubsetType<K> = IndexSet<Vec<Index<<K as Kind>::Opposite>>>;
-
-/// Preference Table Subset
-pub struct PreferenceSubset<'k, K>(&'k PreferenceSubsetType<K>)
+impl<K> SelectBase<K> for Names
 where
-    K: Kind;
-
-impl<'k> PreferenceSubset<'k, Big> {
-    /// Builds a new [`Big`] `table` subset.
-    #[inline]
-    fn new(table: &'k PreferenceTable) -> Self {
-        Self(&table.big_preferences)
-    }
+    K: Kind,
+{
+    type Type = IndexSet<String>;
 }
 
-impl<'k> PreferenceSubset<'k, Little> {
-    /// Builds a new [`Little`] `table` subset.
-    #[inline]
-    fn new(table: &'k PreferenceTable) -> Self {
-        Self(&table.little_preferences)
-    }
-}
-
-/// Preference Table Subset
-pub struct PreferenceSubsetMut<'k, K>(&'k mut PreferenceSubsetType<K>)
+impl<K> Select<K> for Names
 where
-    K: Kind;
-
-impl<'k> PreferenceSubsetMut<'k, Big> {
-    /// Builds a new [`Big`] `table` subset.
+    K: Kind,
+{
     #[inline]
-    fn new(table: &'k mut PreferenceTable) -> Self {
-        Self(&mut table.big_preferences)
+    fn big(&self) -> &SelectType<Big, Self> {
+        &self.bigs
+    }
+
+    #[inline]
+    fn little(&self) -> &SelectType<Little, Self> {
+        &self.littles
     }
 }
 
-impl<'k> PreferenceSubsetMut<'k, Little> {
-    /// Builds a new [`Little`] `table` subset.
+impl<K> SelectMut<K> for Names
+where
+    K: Kind,
+{
     #[inline]
-    fn new(table: &'k mut PreferenceTable) -> Self {
-        Self(&mut table.little_preferences)
+    fn big(&mut self) -> &mut SelectType<Big, Self> {
+        &mut self.bigs
+    }
+
+    #[inline]
+    fn little(&mut self) -> &mut SelectType<Little, Self> {
+        &mut self.littles
     }
 }
 
@@ -377,26 +325,25 @@ impl<'k> PreferenceSubsetMut<'k, Little> {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PreferenceTable {
     /// Big Preferences
-    big_preferences: PreferenceSubsetType<Big>,
+    big_preferences: SelectType<Big, Self>,
 
     /// Little Preferences
-    little_preferences: PreferenceSubsetType<Little>,
+    little_preferences: SelectType<Little, Self>,
 }
 
 impl PreferenceTable {
-    ///
+    /// Inserts the `preferences` as the next row in the preference table.
     #[inline]
     pub fn insert<K, I>(&mut self, preferences: I)
     where
         K: Kind,
         I: IntoIterator<Item = Index<K::Opposite>>,
     {
-        K::preferences_mut(self)
-            .0
-            .insert(Vec::from_iter(preferences));
+        K::select_mut(self).insert(Vec::from_iter(preferences));
     }
 
-    ///
+    /// Updates the `matching_set` by choosing from the preferences of `little` and seeing if any of
+    /// the bigs in that ordering also prefer `little`. If not, the `little` is unmatched.
     #[inline]
     fn update_matching<'i, I>(&self, matching_set: &mut MatchingSet, little: LittleIndex, bigs: I)
     where
@@ -416,7 +363,7 @@ impl PreferenceTable {
         }
     }
 
-    ///
+    /// Collects all the unmatched bigs relative to `matching_set` and declares them as unmatched.
     #[inline]
     fn collect_unmatched_bigs(&self, matching_set: &mut MatchingSet) {
         for big in 0..self.big_preferences.len() {
@@ -427,9 +374,10 @@ impl PreferenceTable {
         }
     }
 
-    ///
+    /// Finds the maximal matching. See [`find_maximal_matching`](Self::find_maximal_matching)
+    /// for more.
     #[inline]
-    fn primitive_matching(&self) -> MatchingSet {
+    fn maximal_matching(&self) -> MatchingSet {
         let mut matching_set = MatchingSet::default();
         for (i, bigs) in self.little_preferences.iter().enumerate() {
             self.update_matching(&mut matching_set, Index::from(i), bigs.iter());
@@ -437,20 +385,31 @@ impl PreferenceTable {
         matching_set
     }
 
-    ///
+    /// Finds the maximal matching where littles select according to their preferences and all bigs
+    /// are assumed to have as much capacity as needed to accomodate all the littles they rank in
+    /// their preferences.
     #[inline]
-    pub fn find_primitive_matching(&self) -> MatchingSet {
-        let mut matching_set = self.primitive_matching();
+    pub fn find_maximal_matching(&self) -> MatchingSet {
+        let mut matching_set = self.maximal_matching();
         self.collect_unmatched_bigs(&mut matching_set);
         matching_set
     }
 
+    /// Finds the evenly-distributed matching.
     ///
+    /// # Algorithm
+    ///
+    /// First a maximal matching is computed which fills all bigs to the capacity equal to the
+    /// number of preferences they allocated. Then, if there are any bigs without matches, the
+    /// fullest big sends their least prefered little to look for another match, and the little
+    /// proceeds down their ranking list to find the next big to match with. This continues until
+    /// all bigs have at least one match or all the matches have an equal number of littles,
+    /// whichever comes first.
     #[inline]
     pub fn find_even_matching(&self) -> Option<MatchingSet> {
-        let mut matching_set = self.primitive_matching();
+        let mut matching_set = self.maximal_matching();
         let mut preference_index = IndexMap::<LittleIndex, usize>::new();
-        while let Some(matching) = matching_set.largest_match(self.big_preferences.len()) {
+        while let Some(matching) = matching_set.next_largest_match(self.big_preferences.len()) {
             if let Some(little) = matching.littles.pop() {
                 let preference_index = match preference_index.entry(little) {
                     Entry::Occupied(mut entry) => {
@@ -472,11 +431,48 @@ impl PreferenceTable {
                         .skip(preference_index),
                 );
             } else {
-                return None;
+                break;
             }
         }
         self.collect_unmatched_bigs(&mut matching_set);
         Some(matching_set)
+    }
+}
+
+impl<K> SelectBase<K> for PreferenceTable
+where
+    K: Kind,
+{
+    type Type = IndexSet<Vec<Index<<K as Kind>::Opposite>>>;
+}
+
+impl<K> Select<K> for PreferenceTable
+where
+    K: Kind,
+{
+    #[inline]
+    fn big(&self) -> &SelectType<Big, Self> {
+        &self.big_preferences
+    }
+
+    #[inline]
+    fn little(&self) -> &SelectType<Little, Self> {
+        &self.little_preferences
+    }
+}
+
+impl<K> SelectMut<K> for PreferenceTable
+where
+    K: Kind,
+{
+    #[inline]
+    fn big(&mut self) -> &mut SelectType<Big, Self> {
+        &mut self.big_preferences
+    }
+
+    #[inline]
+    fn little(&mut self) -> &mut SelectType<Little, Self> {
+        &mut self.little_preferences
     }
 }
 
@@ -491,12 +487,36 @@ pub struct Matching {
 }
 
 impl Matching {
-    ///
+    /// Starts a new [`Matching`] from `big` and the first matching `little`.
     #[inline]
     pub fn from_pair(big: BigIndex, little: LittleIndex) -> Self {
         let mut littles = IndexSet::with_capacity(1);
         littles.insert(little);
         Self { big, littles }
+    }
+
+    /// Inserts `little` into the matching and sorts the matching according to the big's preferences
+    /// from `table`.
+    #[inline]
+    fn insert(&mut self, table: &PreferenceTable, little: LittleIndex) {
+        self.littles.insert(little);
+        self.sort(table);
+    }
+
+    /// Sorts the littles in `self` according to the big's preferences from `table`.
+    #[inline]
+    fn sort(&mut self, table: &PreferenceTable) {
+        self.littles.sort_by(|lhs, rhs| {
+            match (
+                self.big.preference(*lhs, table),
+                self.big.preference(*rhs, table),
+            ) {
+                (Some(lhs_preference), Some(rhs_preference)) => lhs_preference.cmp(&rhs_preference),
+                (None, Some(_)) => Ordering::Greater,
+                (Some(_), None) => Ordering::Less,
+                _ => Ordering::Equal,
+            }
+        });
     }
 }
 
@@ -514,45 +534,40 @@ pub struct MatchingSet {
 }
 
 impl MatchingSet {
-    ///
+    /// Inserts the `big`-`little` match into `self`, sorting the existing match by the preference
+    /// `table` according to the `big`.
     #[inline]
     fn insert_match(&mut self, table: &PreferenceTable, big: BigIndex, little: LittleIndex) {
         match self.matches.binary_search_by_key(&big, |m| m.big) {
-            Ok(index) => {
-                let littles = &mut self.matches[index].littles;
-                littles.insert(little);
-                littles.sort_by(|lhs, rhs| {
-                    match (big.preference(*lhs, table), big.preference(*rhs, table)) {
-                        (Some(lhs_preference), Some(rhs_preference)) => {
-                            lhs_preference.cmp(&rhs_preference)
-                        }
-                        (None, Some(_)) => Ordering::Greater,
-                        (Some(_), None) => Ordering::Less,
-                        _ => Ordering::Equal,
-                    }
-                });
-            }
-            Err(index) => {
-                self.matches.insert(index, Matching::from_pair(big, little));
-            }
+            Ok(index) => self.matches[index].insert(table, little),
+            Err(index) => self.matches.insert(index, Matching::from_pair(big, little)),
         }
     }
 
+    /// Finds the next largest matching in `self` which should remove its lowest ranking little.
+    /// This method is the exiting condition for the [`PreferenceTable::find_even_matching`] method.
     ///
+    /// # Exit Conditions
+    ///
+    /// This method returns `None` on the following conditions (in this order):
+    ///
+    /// 1. The number of matches is equal to the number of bigs.
+    /// 2. There are no matches whatsoever.
+    /// 3. All the matches have the same number of littles.
     #[inline]
-    fn largest_match(&mut self, big_count: usize) -> Option<&mut Matching> {
+    fn next_largest_match(&mut self, big_count: usize) -> Option<&mut Matching> {
         if self.matches.len() == big_count {
             return None;
         }
         if self.matches.len() == 1 {
             return self.matches.get_mut(0);
         }
-        let first = self.matches.first()?.littles.len();
+        let first_len = self.matches.first()?.littles.len();
         if self
             .matches
             .iter()
             .skip(1)
-            .all(|m| first == m.littles.len())
+            .all(|m| first_len == m.littles.len())
         {
             return None;
         }
@@ -565,7 +580,8 @@ impl MatchingSet {
         })
     }
 
-    ///
+    /// Returns a [`Display`](fmt::Display) implementation for `self` which substitutes `names` for
+    /// indices in the matching set.
     #[inline]
     pub fn display<'s>(&'s self, names: &'s Names) -> MatchingSetDisplay<'s> {
         MatchingSetDisplay {
@@ -575,12 +591,13 @@ impl MatchingSet {
     }
 }
 
-///
+/// Matching Set Display
+#[derive(Clone, Copy, Debug)]
 pub struct MatchingSetDisplay<'s> {
-    ///
+    /// Matching Set
     matching_set: &'s MatchingSet,
 
-    ///
+    /// Names
     names: &'s Names,
 }
 

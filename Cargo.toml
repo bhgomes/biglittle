@@ -9,7 +9,7 @@ repository = "https://github.com/bhgomes/biglittle"
 homepage = "https://github.com/bhgomes/biglittle"
 documentation = "https://github.com/bhgomes/biglittle"
 categories = [""]
-keywords = ["stable matching problem"]
+keywords = ["matching algorithm", "ranked-selection algorithm", "stable matching problem"]
 description = "Stable matching for Bigs and Littles"
 publish = false
 
@@ -25,10 +25,9 @@ path = "src/main.rs"
 required-features = ["anyhow", "clap", "csv"]
 
 [dependencies]
-anyhow = { version = "1.0.53", optional = true }
-clap = { version = "3.0.14", optional = true, default-features = false, features = ["derive", "std"] }
+anyhow = { version = "1.0.54", optional = true }
+clap = { version = "3.1.0", optional = true, default-features = false, features = ["derive", "std"] }
 csv = { version = "1.1.6", optional = true, default-features = false }
 derivative = { version = "2.2.0", default-features = false, features = ["use_core"] }
 indexmap = { version = "1.8.0", default-features = false }
-serde = { version = "1.0.136", default-features = false, features = ["derive"] }
 

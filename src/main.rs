@@ -1,6 +1,6 @@
 //! Big-Little Matching
 //!
-//! See the `biglittle` library for more on the matching algorithms used.
+//! See the `biglittle` library for more on the matching algorithm.
 
 use anyhow::{anyhow, bail, Result};
 use biglittle::{Big, Index, Kind, Little, Names, PreferenceTable};
@@ -20,7 +20,7 @@ pub struct Args {
     pub little_input: PathBuf,
 }
 
-///
+/// Checks that the input has the correct extension for CSV parsing.
 #[inline]
 fn check_input_extension(path: PathBuf) -> Result<PathBuf> {
     match path.extension().and_then(OsStr::to_str) {
@@ -30,16 +30,16 @@ fn check_input_extension(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-///
+/// Returns a CSV reader for `path`.
 #[inline]
 fn reader(path: PathBuf) -> Result<Reader<File>> {
     Ok(ReaderBuilder::new()
         .flexible(true)
         .trim(Trim::All)
-        .from_path(path)?)
+        .from_path(check_input_extension(path)?)?)
 }
 
-///
+/// Inserts `name` into the `names` table returning its index.
 #[inline]
 fn insert_name<K>(names: &mut Names, name: &str) -> Result<Index<K>>
 where
@@ -53,61 +53,23 @@ where
     })
 }
 
-///
-#[derive(Default)]
-pub struct Records {
-    ///
-    bigs: IndexMap<String, Vec<String>>,
-
-    ///
-    littles: IndexMap<String, Vec<String>>,
-}
-
-impl Records {
-    ///
-    #[inline]
-    fn load(big_reader: Reader<File>, little_reader: Reader<File>) -> Result<Self> {
-        let mut records = Self::default();
-        load_records::<Big>(big_reader, &mut records.bigs)?;
-        load_records::<Little>(little_reader, &mut records.littles)?;
-        Ok(records)
-    }
-
-    ///
-    #[inline]
-    fn extract_preferences(self, names: &mut Names, table: &mut PreferenceTable) -> Result<()> {
-        for big in self.bigs.keys() {
-            insert_name::<Big>(names, big)?;
-        }
-        for little in self.littles.keys() {
-            insert_name::<Little>(names, little)?;
-        }
-        for (_, preferences) in self.bigs {
-            table.insert::<Big, _>(
-                preferences
-                    .iter()
-                    .map(|n| insert_name(names, n))
-                    .collect::<Result<Vec<_>>>()?,
-            );
-        }
-        for (_, preferences) in self.littles {
-            table.insert::<Little, _>(
-                preferences
-                    .iter()
-                    .map(|n| insert_name(names, n))
-                    .collect::<Result<Vec<_>>>()?,
-            );
-        }
-        Ok(())
-    }
-}
-
-///
+/// Gets the index of `name` from the `names` table.
 #[inline]
-fn load_records<K>(
-    mut reader: Reader<File>,
-    records: &mut IndexMap<String, Vec<String>>,
-) -> Result<()>
+fn get_index<K>(names: &Names, name: &str) -> Result<Index<K>>
+where
+    K: Kind,
+{
+    names.index::<K>(name).ok_or_else(|| {
+        anyhow!(
+            "Unable to get {name} from the {:?} name table.",
+            K::dynamic()
+        )
+    })
+}
+
+/// Loads the records from `reader` into `records` with the known type `K`.
+#[inline]
+fn load_from_reader<K>(mut reader: Reader<File>) -> Result<IndexMap<String, Vec<String>>>
 where
     K: Kind,
 {
@@ -116,6 +78,7 @@ where
         .iter()
         .position(|h| h == "Name")
         .ok_or(anyhow!("Missing `Name` header."))?;
+    let mut records = IndexMap::default();
     for record in reader.records() {
         let record = record?;
         let mut record = record.iter().skip(start_index);
@@ -128,21 +91,46 @@ where
                 .collect(),
         );
     }
-    Ok(())
+    Ok(records)
+}
+
+/// Loads the names and preferences from the `bigs` and `littles` readers.
+#[inline]
+fn load(bigs: Reader<File>, littles: Reader<File>) -> Result<(Names, PreferenceTable)> {
+    let bigs = load_from_reader::<Big>(bigs)?;
+    let littles = load_from_reader::<Little>(littles)?;
+    let mut names = Names::default();
+    let mut table = PreferenceTable::default();
+    for big in bigs.keys() {
+        insert_name::<Big>(&mut names, big)?;
+    }
+    for little in littles.keys() {
+        insert_name::<Little>(&mut names, little)?;
+    }
+    for (_, preferences) in bigs {
+        table.insert::<Big, _>(
+            preferences
+                .iter()
+                .map(|n| get_index(&names, n))
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    for (_, preferences) in littles {
+        table.insert::<Little, _>(
+            preferences
+                .iter()
+                .map(|n| get_index(&names, n))
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    Ok((names, table))
 }
 
 /// Runs the Big-Little Matching CLI.
 #[inline]
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let big_reader = reader(check_input_extension(args.big_input)?)?;
-    let little_reader = reader(check_input_extension(args.little_input)?)?;
-    let mut names = Names::default();
-    let mut preferences = PreferenceTable::default();
-
-    let records = Records::load(big_reader, little_reader)?;
-    records.extract_preferences(&mut names, &mut preferences)?;
-
+    let (names, preferences) = load(reader(args.big_input)?, reader(args.little_input)?)?;
     println!(
         "{}",
         preferences
@@ -150,6 +138,5 @@ pub fn main() -> anyhow::Result<()> {
             .ok_or(anyhow!("Unable to find fair matching."))?
             .display(&names)
     );
-
     Ok(())
 }
