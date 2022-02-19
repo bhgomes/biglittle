@@ -131,12 +131,7 @@ fn load(bigs: Reader<File>, littles: Reader<File>) -> Result<(Names, PreferenceT
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let (names, preferences) = load(reader(args.big_input)?, reader(args.little_input)?)?;
-    println!(
-        "{}",
-        preferences
-            .find_even_matching()
-            .ok_or(anyhow!("Unable to find fair matching."))?
-            .display(&names)
-    );
+    println!("{}\n", preferences.display(&names));
+    println!("{}", preferences.find_even_matching().display(&names));
     Ok(())
 }

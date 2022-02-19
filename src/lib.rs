@@ -274,13 +274,26 @@ impl Names {
         K::select(self).get_index(index.index as usize)
     }
 
-    ///
+    /// Returns the index of the `name` in `self` if it has an entry of the kind `K`.
     #[inline]
     pub fn index<K>(&self, name: &str) -> Option<Index<K>>
     where
         K: Kind,
     {
         K::select(self).get_index_of(name).map(Into::into)
+    }
+
+    /// Finds the length of the longest name of kind `K`.
+    #[inline]
+    fn longest_name_length<K>(&self) -> usize
+    where
+        K: Kind,
+    {
+        K::select(self)
+            .iter()
+            .map(String::len)
+            .max()
+            .unwrap_or_default()
     }
 }
 
@@ -406,7 +419,7 @@ impl PreferenceTable {
     /// all bigs have at least one match or all the matches have an equal number of littles,
     /// whichever comes first.
     #[inline]
-    pub fn find_even_matching(&self) -> Option<MatchingSet> {
+    pub fn find_even_matching(&self) -> MatchingSet {
         let mut matching_set = self.maximal_matching();
         let mut preference_index = IndexMap::<LittleIndex, usize>::new();
         while let Some(matching) = matching_set.next_largest_match(self.big_preferences.len()) {
@@ -435,7 +448,14 @@ impl PreferenceTable {
             }
         }
         self.collect_unmatched_bigs(&mut matching_set);
-        Some(matching_set)
+        matching_set
+    }
+
+    /// Returns a [`Display`](fmt::Display) implementation for `self` which substitutes `names` for
+    /// indices in the preference table.
+    #[inline]
+    pub fn display<'s>(&'s self, names: &'s Names) -> PreferenceTableDisplay<'s> {
+        PreferenceTableDisplay { table: self, names }
     }
 }
 
@@ -473,6 +493,50 @@ where
     #[inline]
     fn little(&mut self) -> &mut SelectType<Little, Self> {
         &mut self.little_preferences
+    }
+}
+
+/// Preference Table Display
+#[derive(Clone, Copy, Debug)]
+pub struct PreferenceTableDisplay<'s> {
+    /// Preference Table
+    table: &'s PreferenceTable,
+
+    /// Names
+    names: &'s Names,
+}
+
+impl<'s> fmt::Display for PreferenceTableDisplay<'s> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let longest_big_name_length = self.names.longest_name_length::<Big>();
+        let longest_little_name_length = self.names.longest_name_length::<Little>();
+        write!(f, "PreferenceTable {{\n    bigs: {{")?;
+        for (big, littles) in self.table.big_preferences.iter().enumerate() {
+            let big_name = self.names.get(BigIndex::from(big)).unwrap();
+            write!(
+                f,
+                "\n        {}: {}[",
+                big_name,
+                " ".repeat(longest_big_name_length - big_name.len())
+            )?;
+            display_iter(f, littles.iter().map(|i| self.names.get(*i).unwrap()))?;
+            write!(f, "],")?;
+        }
+        write!(f, "\n    }},\n    littles: {{")?;
+        for (little, bigs) in self.table.little_preferences.iter().enumerate() {
+            let little_name = self.names.get(LittleIndex::from(little)).unwrap();
+            write!(
+                f,
+                "\n        {}: {}[",
+                little_name,
+                " ".repeat(longest_little_name_length - little_name.len())
+            )?;
+            display_iter(f, bigs.iter().map(|i| self.names.get(*i).unwrap()))?;
+            write!(f, "],")?;
+        }
+        write!(f, "\n    }},\n}}")?;
+        Ok(())
     }
 }
 
@@ -604,29 +668,59 @@ pub struct MatchingSetDisplay<'s> {
 impl<'s> fmt::Display for MatchingSetDisplay<'s> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MatchingSet {{\n    matches: [")?;
+        let longest_big_name_length = self.names.longest_name_length::<Big>();
+        write!(f, "MatchingSet {{\n    matches: {{")?;
         for matching in &self.matching_set.matches {
+            let big_name = self.names.get(matching.big).unwrap();
             write!(
                 f,
-                "\n        {{ big: {:?}, littles: [",
-                self.names.get(matching.big).unwrap(),
+                "\n        {}: {}[",
+                big_name,
+                " ".repeat(longest_big_name_length - big_name.len())
             )?;
-            for little in &matching.littles {
-                write!(f, "{:?}, ", self.names.get(*little).unwrap())?;
-            }
-            write!(f, "] }}")?;
+            display_iter(
+                f,
+                matching.littles.iter().map(|i| self.names.get(*i).unwrap()),
+            )?;
+            write!(f, "],")?;
         }
-        writeln!(f, "\n    ],")?;
-        write!(f, "    unmatched_bigs: [")?;
-        for big in &self.matching_set.unmatched_bigs {
-            write!(f, "{:?}, ", self.names.get(*big).unwrap())?;
-        }
+        writeln!(f, "\n    }},")?;
+        write!(f, "    unmatched_bigs:    [")?;
+        display_iter(
+            f,
+            self.matching_set
+                .unmatched_bigs
+                .iter()
+                .map(|i| self.names.get(*i).unwrap()),
+        )?;
         writeln!(f, "]")?;
         write!(f, "    unmatched_littles: [")?;
-        for little in &self.matching_set.unmatched_littles {
-            write!(f, "{:?}, ", self.names.get(*little).unwrap())?;
-        }
+        display_iter(
+            f,
+            self.matching_set
+                .unmatched_littles
+                .iter()
+                .map(|i| self.names.get(*i).unwrap()),
+        )?;
         writeln!(f, "],")?;
         write!(f, "}}")
     }
+}
+
+/// Displays an iterator by adding commas between each element.
+#[inline]
+fn display_iter<'t, T, I>(f: &mut fmt::Formatter, iter: I) -> fmt::Result
+where
+    T: 't + fmt::Display,
+    I: IntoIterator<Item = &'t T>,
+{
+    let mut iter = iter.into_iter().peekable();
+    while let Some(next) = iter.next() {
+        if iter.peek().is_some() {
+            write!(f, "{}, ", next)?;
+        } else {
+            write!(f, "{}", next)?;
+        }
+    }
+    Ok(())
 }
